@@ -13,3 +13,4 @@ services:
         value: production
       - key: CLIENT_ORIGIN
         value: "*"
+

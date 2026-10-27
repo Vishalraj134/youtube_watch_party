@@ -1,0 +1,21 @@
+{
+  "name": "youtube-watch-party-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-time synchronized YouTube watch party application with role-based permissions.",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "build:client": "npm run build --prefix client"
+  },
+  "keywords": [
+    "youtube",
+    "watch-party",
+    "socketio",
+    "react",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC"
+}

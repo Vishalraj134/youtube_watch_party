@@ -9,11 +9,12 @@ import { registerRoomHandlers } from './sockets/roomHandler.js';
 const app = express();
 const server = http.createServer(app);
 
-// Helper to validate allowed origins (supports dynamic localhost dev ports e.g. 5173, 5174)
+// Helper to validate allowed origins (supports wildcard '*', dynamic localhost dev ports, and custom origins)
 const isOriginAllowed = (origin, callback) => {
   if (!origin) return callback(null, true);
   const allowedOrigins = config.clientOrigin.split(',').map((o) => o.trim());
   if (
+    allowedOrigins.includes('*') ||
     allowedOrigins.includes(origin) ||
     (config.nodeEnv === 'development' && /^http:\/\/localhost:\d+$/.test(origin))
   ) {

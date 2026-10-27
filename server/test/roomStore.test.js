@@ -757,4 +757,308 @@ describe('RoomStore In-Memory Unit Tests', () => {
       );
     });
   });
+
+  describe('Remove / Kick Participant Workflow', () => {
+    test('Host can remove a participant from the active room', () => {
+      const { room, user: hostUser } = store.createRoom({
+        username: 'AliceHost',
+        socketId: 's_host',
+      });
+      const { user: guestUser } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'BobGuest',
+        socketId: 's_guest',
+      });
+
+      const { removedUser, room: updatedRoom } = store.removeParticipant({
+        roomCode: room.roomCode,
+        socketId: 's_host',
+        targetUserId: guestUser.userId,
+      });
+
+      assert.equal(removedUser.userId, guestUser.userId);
+      assert.equal(removedUser.username, 'BobGuest');
+      assert.equal(updatedRoom.participants.length, 1);
+      assert.equal(updatedRoom.participants[0].userId, hostUser.userId);
+      assert.equal(store.socketMap.has('s_guest'), false, 'Removed socket must be purged from socketMap');
+      assert.equal(store.socketMap.has('s_host'), true, 'Host socket mapping must remain intact');
+    });
+
+    test('Participant cannot remove another participant (permission denied)', () => {
+      const { room } = store.createRoom({
+        username: 'AliceHost',
+        socketId: 's_host',
+      });
+      const { user: guest1 } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'BobGuest1',
+        socketId: 's_guest1',
+      });
+      const { user: guest2 } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'CharlieGuest2',
+        socketId: 's_guest2',
+      });
+
+      assert.throws(
+        () => {
+          store.removeParticipant({
+            roomCode: room.roomCode,
+            socketId: 's_guest1',
+            targetUserId: guest2.userId,
+          });
+        },
+        (err) => err.code === 'PERMISSION_DENIED'
+      );
+
+      const currentRoom = store.getRoom(room.roomCode);
+      assert.equal(currentRoom.participants.length, 3, 'All participants must remain in room');
+    });
+
+    test('Host cannot remove themselves from the room', () => {
+      const { room, user: hostUser } = store.createRoom({
+        username: 'AliceHost',
+        socketId: 's_host',
+      });
+
+      assert.throws(
+        () => {
+          store.removeParticipant({
+            roomCode: room.roomCode,
+            socketId: 's_host',
+            targetUserId: hostUser.userId,
+          });
+        },
+        (err) => err.code === 'CANNOT_REMOVE_SELF'
+      );
+
+      const currentRoom = store.getRoom(room.roomCode);
+      assert.equal(currentRoom.participants.length, 1);
+      assert.equal(currentRoom.hostUserId, hostUser.userId);
+    });
+
+    test('Rejects invalid targets and non-existent participants', () => {
+      const { room } = store.createRoom({
+        username: 'AliceHost',
+        socketId: 's_host',
+      });
+
+      // Target does not exist
+      assert.throws(
+        () => {
+          store.removeParticipant({
+            roomCode: room.roomCode,
+            socketId: 's_host',
+            targetUserId: 'usr_nonexistent',
+          });
+        },
+        (err) => err.code === 'PARTICIPANT_NOT_FOUND'
+      );
+
+      // Target in a different room
+      const { user: otherGuest } = store.createRoom({
+        username: 'OtherHost',
+        socketId: 's_other_host',
+      });
+
+      assert.throws(
+        () => {
+          store.removeParticipant({
+            roomCode: room.roomCode,
+            socketId: 's_host',
+            targetUserId: otherGuest.userId,
+          });
+        },
+        (err) => err.code === 'PARTICIPANT_NOT_FOUND'
+      );
+
+      // Nonexistent room
+      assert.throws(
+        () => {
+          store.removeParticipant({
+            roomCode: 'WP-FAKE',
+            socketId: 's_host',
+            targetUserId: 'usr_abc',
+          });
+        },
+        (err) => err.code === 'ROOM_NOT_FOUND'
+      );
+    });
+
+    test('Remaining participants receive updated participant list and count', () => {
+      const { room, user: host } = store.createRoom({
+        username: 'Host',
+        socketId: 's_host',
+      });
+      const { user: g1 } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'Guest1',
+        socketId: 's_g1',
+      });
+      const { user: g2 } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'Guest2',
+        socketId: 's_g2',
+      });
+
+      const { room: afterRemove } = store.removeParticipant({
+        roomCode: room.roomCode,
+        socketId: 's_host',
+        targetUserId: g1.userId,
+      });
+
+      assert.equal(afterRemove.participants.length, 2);
+      assert.deepEqual(
+        afterRemove.participants.map((p) => p.userId).sort(),
+        [host.userId, g2.userId].sort()
+      );
+    });
+
+    test('Removed participant cannot continue controlling playback or changing video', () => {
+      const { room } = store.createRoom({
+        username: 'Host',
+        initialVideoUrl: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+        policy: 'collaborative',
+        socketId: 's_host',
+      });
+      const { user: guest } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'Guest',
+        socketId: 's_guest',
+      });
+
+      // Guest can initially control in collaborative room
+      const initialControl = store.canControlPlayback(store.rooms.get(room.roomCode), 's_guest');
+      assert.equal(initialControl.allowed, true);
+
+      // Host removes guest
+      store.removeParticipant({
+        roomCode: room.roomCode,
+        socketId: 's_host',
+        targetUserId: guest.userId,
+      });
+
+      // Subsequent control checks must fail
+      const controlAfterRemoval = store.canControlPlayback(store.rooms.get(room.roomCode), 's_guest');
+      assert.equal(controlAfterRemoval.allowed, false);
+
+      assert.throws(
+        () => {
+          store.syncPlayback({
+            roomCode: room.roomCode,
+            socketId: 's_guest',
+            action: 'play',
+            currentTime: 10,
+          });
+        },
+        (err) => err.code === 'PERMISSION_DENIED'
+      );
+
+      assert.throws(
+        () => {
+          store.changeVideo({
+            roomCode: room.roomCode,
+            socketId: 's_guest',
+            videoUrl: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
+          });
+        },
+        (err) => err.code === 'PERMISSION_DENIED'
+      );
+    });
+
+    test('Invalidates pending control requests from removed participant', () => {
+      const { room } = store.createRoom({
+        username: 'Host',
+        socketId: 's_host',
+      });
+      const { user: guest } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'Guest',
+        socketId: 's_guest',
+      });
+
+      const { request } = store.requestControl({
+        roomCode: room.roomCode,
+        socketId: 's_guest',
+      });
+      assert.equal(request.status, 'pending');
+
+      store.removeParticipant({
+        roomCode: room.roomCode,
+        socketId: 's_host',
+        targetUserId: guest.userId,
+      });
+
+      const rawRoom = store.rooms.get(room.roomCode);
+      const reqAfter = rawRoom.controlRequests.find((r) => r.requestId === request.requestId);
+      assert.equal(reqAfter.status, 'invalidated');
+    });
+
+    test('Removed participant cannot recover session via reconnectParticipant', () => {
+      const { room } = store.createRoom({
+        username: 'Host',
+        socketId: 's_host',
+      });
+      const { user: guest } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'Guest',
+        socketId: 's_guest',
+      });
+
+      store.removeParticipant({
+        roomCode: room.roomCode,
+        socketId: 's_host',
+        targetUserId: guest.userId,
+      });
+
+      assert.throws(
+        () => {
+          store.reconnectParticipant({
+            roomCode: room.roomCode,
+            userId: guest.userId,
+            socketId: 's_guest_reconnect',
+          });
+        },
+        (err) => err.code === 'REMOVED_FROM_ROOM'
+      );
+    });
+
+    test('Host can remove a participant who temporarily dropped connection', () => {
+      const { room } = store.createRoom({
+        username: 'Host',
+        socketId: 's_host',
+      });
+      const { user: guest } = store.joinRoom({
+        roomCode: room.roomCode,
+        username: 'Guest',
+        socketId: 's_guest',
+      });
+
+      // Guest disconnects unexpectedly
+      store.handleDisconnect('s_guest');
+      const rawRoom = store.rooms.get(room.roomCode);
+      assert.equal(rawRoom.disconnectedParticipants.has(guest.userId), true);
+
+      // Host removes the disconnected guest
+      const { removedUser } = store.removeParticipant({
+        roomCode: room.roomCode,
+        socketId: 's_host',
+        targetUserId: guest.userId,
+      });
+      assert.equal(removedUser.userId, guest.userId);
+      assert.equal(rawRoom.disconnectedParticipants.has(guest.userId), false);
+
+      // Attempted reconnection is rejected
+      assert.throws(
+        () => {
+          store.reconnectParticipant({
+            roomCode: room.roomCode,
+            userId: guest.userId,
+            socketId: 's_new',
+          });
+        },
+        (err) => err.code === 'REMOVED_FROM_ROOM'
+      );
+    });
+  });
 });

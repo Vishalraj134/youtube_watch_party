@@ -17,7 +17,8 @@ import {
   X, 
   ArrowLeft,
   Sparkles,
-  Wifi
+  Wifi,
+  UserMinus
 } from 'lucide-react';
 import YouTubePlayer from '../components/YouTubePlayer';
 import YouTubeIcon from '../components/YouTubeIcon';
@@ -31,7 +32,8 @@ import {
   approveControlSocket,
   rejectControlSocket,
   revokeControlSocket,
-  reconnectRoomSocket
+  reconnectRoomSocket,
+  removeParticipantSocket
 } from '../services/socket';
 
 export default function WatchRoomPage({
@@ -56,6 +58,9 @@ export default function WatchRoomPage({
   const [feedbackMessage, setFeedbackMessage] = useState(
     `Connected to room ${room.roomCode}. Real-time YouTube sync engine is active.`
   );
+  const [removingUserId, setRemovingUserId] = useState(null);
+  const [wasRemoved, setWasRemoved] = useState(false);
+  const [removalMessage, setRemovalMessage] = useState('');
 
   // References to active player instance and synchronization loop guard
   const playerRef = useRef(null);
@@ -312,15 +317,48 @@ export default function WatchRoomPage({
 
     // 5. Participant departed
     const handleUserLeft = ({ user: departedUser, room: updatedRoom }) => {
-      setRoom(updatedRoom);
+      if (updatedRoom) {
+        setRoom(updatedRoom);
+      }
+      if (departedUser?.userId === currentUser?.userId) {
+        sessionStorage.removeItem('syncplay_session');
+      }
       setLogs((prev) => [
         {
           id: Date.now().toString(),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: `${departedUser.username} left the party`,
+          text: `${departedUser?.username || 'A member'} left the party`,
         },
         ...prev.slice(0, 49),
       ]);
+    };
+
+    // 5b. Participant removed / kicked by Host
+    const handleParticipantRemoved = ({ targetUserId, user: removedUser, message, room: updatedRoom }) => {
+      if (updatedRoom) {
+        setRoom(updatedRoom);
+      }
+      const isTarget = targetUserId === currentUser?.userId || removedUser?.userId === currentUser?.userId;
+      if (isTarget) {
+        sessionStorage.removeItem('syncplay_session');
+        setWasRemoved(true);
+        setRemovalMessage(message || 'You have been removed from the watch party by the Host.');
+        setIsPlaying(false);
+        if (playerRef.current) {
+          try {
+            playerRef.current.pauseVideo?.();
+          } catch {}
+        }
+      } else if (removedUser) {
+        setLogs((prev) => [
+          {
+            id: Date.now().toString(),
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            text: `${removedUser.username} was removed from the party by Host`,
+          },
+          ...prev.slice(0, 49),
+        ]);
+      }
     };
 
     // 6. Control request received
@@ -434,6 +472,7 @@ export default function WatchRoomPage({
     socket.on('video_changed', handleVideoChanged);
     socket.on('user_joined', handleUserJoined);
     socket.on('user_left', handleUserLeft);
+    socket.on('participant_removed', handleParticipantRemoved);
     socket.on('control_requested', handleControlRequested);
     socket.on('control_approved', handleControlApproved);
     socket.on('control_rejected', handleControlRejected);
@@ -449,6 +488,7 @@ export default function WatchRoomPage({
       socket.off('video_changed', handleVideoChanged);
       socket.off('user_joined', handleUserJoined);
       socket.off('user_left', handleUserLeft);
+      socket.off('participant_removed', handleParticipantRemoved);
       socket.off('control_requested', handleControlRequested);
       socket.off('control_approved', handleControlApproved);
       socket.off('control_rejected', handleControlRejected);
@@ -557,6 +597,40 @@ export default function WatchRoomPage({
       setFeedbackMessage('Temporary control revoked.');
     } catch (err) {
       setFeedbackMessage(`Revoke failed: ${err.message}`);
+    }
+  };
+
+  const handleRemoveParticipant = async (targetUserId, targetUsername) => {
+    if (!isHost) return;
+    if (targetUserId === currentUser?.userId) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to remove ${targetUsername} from the watch party?`
+    );
+    if (!confirmed) return;
+
+    setRemovingUserId(targetUserId);
+    try {
+      const res = await removeParticipantSocket({
+        roomCode: room.roomCode,
+        targetUserId,
+      });
+      if (res.room) {
+        setRoom(res.room);
+      }
+      setFeedbackMessage(`${targetUsername} was removed from the party.`);
+      setLogs((prev) => [
+        {
+          id: Date.now().toString(),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          text: `You removed ${targetUsername} from the party`,
+        },
+        ...prev.slice(0, 49),
+      ]);
+    } catch (err) {
+      setFeedbackMessage(`Failed to remove ${targetUsername}: ${err.message}`);
+    } finally {
+      setRemovingUserId(null);
     }
   };
 
@@ -1130,9 +1204,17 @@ export default function WatchRoomPage({
 
                       {isHost && !isSelf && (
                         <div className="participant-actions">
-                          <span className="action-hint-pill" title="Host Moderation Controls">
-                            Member
-                          </span>
+                          <button
+                            type="button"
+                            className="btn-kick-participant"
+                            title={`Remove ${user.username} from party`}
+                            onClick={() => handleRemoveParticipant(user.userId, user.username)}
+                            disabled={removingUserId === user.userId}
+                            aria-label={`Remove ${user.username}`}
+                          >
+                            <UserMinus size={13} />
+                            <span>{removingUserId === user.userId ? 'Removing...' : 'Remove'}</span>
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1261,6 +1343,31 @@ export default function WatchRoomPage({
           )}
         </aside>
       </div>
+
+      {/* Removed from room notification modal */}
+      {wasRemoved && (
+        <div className="removal-modal-backdrop">
+          <div className="removal-modal-card">
+            <div className="removal-modal-icon">
+              <UserMinus size={36} color="#ef4444" />
+            </div>
+            <h3 className="removal-modal-title">Removed from Party</h3>
+            <p className="removal-modal-desc">
+              {removalMessage || `You have been removed from watch party "${room.roomCode}" by the Host.`}
+            </p>
+            <button
+              type="button"
+              className="btn-return-lobby"
+              onClick={() => {
+                sessionStorage.removeItem('syncplay_session');
+                onLeaveRoom?.();
+              }}
+            >
+              Return to Lobby
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -235,6 +235,101 @@ class RoomStore {
   }
 
   /**
+   * Authoritatively removes/kicks a participant from a room (Host only)
+   * @param {Object} params
+   * @param {string} params.roomCode
+   * @param {string} params.socketId - Calling socket ID (must be authoritative Host)
+   * @param {string} params.targetUserId - Target user ID to remove
+   * @returns {{ removedUser: Object, room: Object }}
+   */
+  removeParticipant({ roomCode, socketId, targetUserId }) {
+    if (!roomCode || typeof roomCode !== 'string') {
+      throw { code: 'INVALID_ROOM_CODE', message: 'Room code is required.' };
+    }
+    const cleanRoomCode = roomCode.trim().toUpperCase();
+    const room = this.rooms.get(cleanRoomCode);
+    if (!room) {
+      throw { code: 'ROOM_NOT_FOUND', message: `Room "${cleanRoomCode}" does not exist or has expired.` };
+    }
+
+    if (!socketId) {
+      throw { code: 'SOCKET_REQUIRED', message: 'Active socket ID is required.' };
+    }
+
+    // Verify caller is the authoritative host of this room
+    const caller = room.participants.find((p) => p.socketId === socketId);
+    if (!caller) {
+      throw { code: 'PERMISSION_DENIED', message: 'You are not an active member of this room.' };
+    }
+    if (caller.role !== 'host' || room.hostUserId !== caller.userId) {
+      throw {
+        code: 'PERMISSION_DENIED',
+        message: 'Only the Host can remove participants from the room.',
+      };
+    }
+
+    if (!targetUserId || typeof targetUserId !== 'string') {
+      throw { code: 'INVALID_TARGET_USER_ID', message: 'Target user ID is required.' };
+    }
+
+    // Host cannot remove themselves
+    if (targetUserId === caller.userId || targetUserId === room.hostUserId) {
+      throw {
+        code: 'CANNOT_REMOVE_SELF',
+        message: 'The Host cannot remove themselves from the room.',
+      };
+    }
+
+    // Check active participants
+    const activeIndex = room.participants.findIndex((p) => p.userId === targetUserId);
+    let removedUser = null;
+
+    if (activeIndex !== -1) {
+      [removedUser] = room.participants.splice(activeIndex, 1);
+    } else if (room.disconnectedParticipants && room.disconnectedParticipants.has(targetUserId)) {
+      removedUser = room.disconnectedParticipants.get(targetUserId);
+      room.disconnectedParticipants.delete(targetUserId);
+    } else {
+      throw {
+        code: 'PARTICIPANT_NOT_FOUND',
+        message: 'Participant was not found in this room.',
+      };
+    }
+
+    // Clean up active socket mapping for removed participant
+    if (removedUser.socketId) {
+      this.socketMap.delete(removedUser.socketId);
+    }
+
+    // Purge from disconnected pool if lingering
+    if (room.disconnectedParticipants) {
+      room.disconnectedParticipants.delete(targetUserId);
+    }
+
+    // Invalidate any pending control requests from this removed participant
+    if (room.controlRequests) {
+      room.controlRequests.forEach((req) => {
+        if (req.userId === targetUserId && req.status === 'pending') {
+          req.status = 'invalidated';
+        }
+      });
+    }
+
+    // Prevent recovering or reusing session in this room
+    if (!room.removedUserIds) {
+      room.removedUserIds = new Set();
+    }
+    room.removedUserIds.add(targetUserId);
+
+    room.lastStateUpdatedAt = new Date().toISOString();
+
+    return {
+      removedUser,
+      room: this.sanitizeRoom(room),
+    };
+  }
+
+  /**
    * Handles unexpected socket disconnection with recovery tracking
    * @param {string} socketId 
    * @returns {{ roomCode: string, leftUser: Object, remainingRoom: Object|null } | null}
@@ -288,6 +383,14 @@ class RoomStore {
     const room = this.rooms.get(cleanRoomCode);
     if (!room) {
       throw { code: 'ROOM_NOT_FOUND', message: `Room "${cleanRoomCode}" does not exist or has expired.` };
+    }
+
+    // Check if participant was removed by host
+    if (room.removedUserIds && room.removedUserIds.has(userId)) {
+      throw {
+        code: 'REMOVED_FROM_ROOM',
+        message: 'You have been removed from this room by the Host.',
+      };
     }
 
     // 1. Check if participant is already in active participants list

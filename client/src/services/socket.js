@@ -292,3 +292,31 @@ export function reconnectRoomSocket({ roomCode, userId }) {
     });
   });
 }
+
+/**
+ * Removes/kicks a participant from the room (Host only)
+ * @param {Object} payload
+ * @param {string} payload.roomCode
+ * @param {string} payload.targetUserId
+ * @returns {Promise<{ success: boolean, removedUser: Object, room: Object }>}
+ */
+export function removeParticipantSocket({ roomCode, targetUserId }) {
+  const socket = getSocket();
+  return new Promise((resolve, reject) => {
+    if (!socket.connected) {
+      socket.connect();
+    }
+    const timer = setTimeout(() => {
+      reject(new Error('Server took too long to remove participant.'));
+    }, 7000);
+
+    socket.emit('remove_participant', { roomCode, targetUserId }, (res) => {
+      clearTimeout(timer);
+      if (res && res.success) {
+        resolve(res);
+      } else {
+        reject(new Error(res?.error || 'Failed to remove participant.'));
+      }
+    });
+  });
+}

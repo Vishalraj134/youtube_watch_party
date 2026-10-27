@@ -907,5 +907,179 @@ describe('Socket.IO Real-Time Communication Integration Tests', () => {
     host.disconnect();
     guest.disconnect();
   });
+
+  test('Host removes participant via remove_participant, participant receives event, and cannot control room', async () => {
+    const host = ClientIO(`http://localhost:${serverPort}`);
+    const guest1 = ClientIO(`http://localhost:${serverPort}`);
+    const guest2 = ClientIO(`http://localhost:${serverPort}`);
+
+    let roomCode = '';
+    let hostUser = null;
+    let guest1User = null;
+    let guest2User = null;
+
+    // Step 1: Host creates room
+    await new Promise((resolve) => {
+      host.emit('create_room', { username: 'KickHost' }, (res) => {
+        assert.equal(res.success, true);
+        roomCode = res.room.roomCode;
+        hostUser = res.user;
+        resolve();
+      });
+    });
+
+    // Step 2: Guest 1 & Guest 2 join
+    await new Promise((resolve) => {
+      guest1.emit('join_room', { roomCode, username: 'KickGuest1' }, (res) => {
+        assert.equal(res.success, true);
+        guest1User = res.user;
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      guest2.emit('join_room', { roomCode, username: 'KickGuest2' }, (res) => {
+        assert.equal(res.success, true);
+        guest2User = res.user;
+        resolve();
+      });
+    });
+
+    // Step 3: Listeners for removal
+    const guest1RemovedPromise = new Promise((resolve) => {
+      guest1.once('participant_removed', (data) => {
+        assert.equal(data.user.userId, guest1User.userId);
+        assert.ok(data.message.includes('removed'));
+        resolve();
+      });
+    });
+
+    const guest2NotifiedPromise = new Promise((resolve) => {
+      guest2.once('user_left', (data) => {
+        assert.equal(data.user.userId, guest1User.userId);
+        assert.equal(data.room.participants.length, 2);
+        resolve();
+      });
+    });
+
+    // Step 4: Host removes Guest 1
+    await new Promise((resolve) => {
+      host.emit(
+        'remove_participant',
+        { roomCode, targetUserId: guest1User.userId },
+        (res) => {
+          assert.equal(res.success, true);
+          assert.equal(res.removedUser.userId, guest1User.userId);
+          assert.equal(res.room.participants.length, 2);
+          resolve();
+        }
+      );
+    });
+
+    await Promise.all([guest1RemovedPromise, guest2NotifiedPromise]);
+
+    // Step 5: Removed Guest 1 tries playback_action -> rejected
+    await new Promise((resolve) => {
+      guest1.emit(
+        'playback_action',
+        { roomCode, action: 'play', currentTime: 10 },
+        (res) => {
+          assert.equal(res.success, false);
+          assert.equal(res.code, 'PERMISSION_DENIED');
+          resolve();
+        }
+      );
+    });
+
+    // Step 6: Removed Guest 1 tries reconnect_room -> rejected
+    await new Promise((resolve) => {
+      guest1.emit(
+        'reconnect_room',
+        { roomCode, userId: guest1User.userId },
+        (res) => {
+          assert.equal(res.success, false);
+          assert.equal(res.code, 'REMOVED_FROM_ROOM');
+          resolve();
+        }
+      );
+    });
+
+    host.disconnect();
+    guest1.disconnect();
+    guest2.disconnect();
+  });
+
+  test('Unauthorized participant attempting remove_participant is rejected with PERMISSION_DENIED', async () => {
+    const host = ClientIO(`http://localhost:${serverPort}`);
+    const guest1 = ClientIO(`http://localhost:${serverPort}`);
+    const guest2 = ClientIO(`http://localhost:${serverPort}`);
+
+    let roomCode = '';
+    let guest2User = null;
+
+    await new Promise((resolve) => {
+      host.emit('create_room', { username: 'AuthHost' }, (res) => {
+        roomCode = res.room.roomCode;
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      guest1.emit('join_room', { roomCode, username: 'AuthGuest1' }, () => resolve());
+    });
+
+    await new Promise((resolve) => {
+      guest2.emit('join_room', { roomCode, username: 'AuthGuest2' }, (res) => {
+        guest2User = res.user;
+        resolve();
+      });
+    });
+
+    // Guest 1 tries to kick Guest 2
+    await new Promise((resolve) => {
+      guest1.emit(
+        'remove_participant',
+        { roomCode, targetUserId: guest2User.userId },
+        (res) => {
+          assert.equal(res.success, false);
+          assert.equal(res.code, 'PERMISSION_DENIED');
+          resolve();
+        }
+      );
+    });
+
+    host.disconnect();
+    guest1.disconnect();
+    guest2.disconnect();
+  });
+
+  test('Host attempting to remove themselves via remove_participant is rejected with CANNOT_REMOVE_SELF', async () => {
+    const host = ClientIO(`http://localhost:${serverPort}`);
+
+    let roomCode = '';
+    let hostUser = null;
+
+    await new Promise((resolve) => {
+      host.emit('create_room', { username: 'SelfKickHost' }, (res) => {
+        roomCode = res.room.roomCode;
+        hostUser = res.user;
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      host.emit(
+        'remove_participant',
+        { roomCode, targetUserId: hostUser.userId },
+        (res) => {
+          assert.equal(res.success, false);
+          assert.equal(res.code, 'CANNOT_REMOVE_SELF');
+          resolve();
+        }
+      );
+    });
+
+    host.disconnect();
+  });
 });
 

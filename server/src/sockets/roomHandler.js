@@ -404,6 +404,73 @@ export function registerRoomHandlers(io, socket) {
   });
 
   /**
+   * REMOVE PARTICIPANT / KICK PARTICIPANT
+   * Host removes a participant from the room.
+   */
+  const handleRemoveParticipant = (payload, callback) => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        throw { code: 'INVALID_PAYLOAD', message: 'Payload must be an object.' };
+      }
+
+      const { roomCode, targetUserId } = payload;
+      const result = roomStore.removeParticipant({
+        roomCode,
+        socketId: socket.id,
+        targetUserId,
+      });
+
+      const cleanRoomCode = result.room.roomCode;
+
+      // Disconnect target socket from Socket.IO room channel and notify them directly
+      const targetSocket = result.removedUser?.socketId
+        ? io.sockets.sockets.get(result.removedUser.socketId)
+        : null;
+
+      if (targetSocket) {
+        targetSocket.leave(cleanRoomCode);
+        targetSocket.emit('participant_removed', {
+          roomCode: cleanRoomCode,
+          user: result.removedUser,
+          targetUserId: result.removedUser.userId,
+          message: 'You have been removed from the watch party by the Host.',
+        });
+      }
+
+      // Broadcast departure to active room members
+      io.to(cleanRoomCode).emit('user_left', {
+        user: result.removedUser,
+        room: result.room,
+        reason: 'removed',
+      });
+
+      io.to(cleanRoomCode).emit('participant_removed', {
+        targetUserId: result.removedUser.userId,
+        user: result.removedUser,
+        room: result.room,
+      });
+
+      if (typeof callback === 'function') {
+        callback({ success: true, removedUser: result.removedUser, room: result.room });
+      }
+
+      console.log(`[Socket.IO] Host removed ${result.removedUser.username} (${result.removedUser.userId}) from ${cleanRoomCode}`);
+    } catch (err) {
+      const errorPayload = {
+        code: err.code || 'REMOVE_PARTICIPANT_FAILED',
+        message: err.message || 'Failed to remove participant.',
+      };
+      socket.emit('room_error', errorPayload);
+      if (typeof callback === 'function') {
+        callback({ success: false, error: errorPayload.message, code: errorPayload.code });
+      }
+    }
+  };
+
+  socket.on('remove_participant', handleRemoveParticipant);
+  socket.on('kick_participant', handleRemoveParticipant);
+
+  /**
    * RECONNECT ROOM
    * Re-associates a reconnecting participant socket with their existing room session.
    */

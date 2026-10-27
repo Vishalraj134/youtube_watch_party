@@ -1,15 +1,16 @@
 # 🎬 YouTube Watch Party System
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Vishalraj134/youtube_watch_party)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FVishalraj134%2Fyoutube_watch_party&root-directory=client)
 
 > A production-ready, real-time synchronized YouTube watch party web application built with React, Node.js, Express, Socket.IO, and the YouTube IFrame API.
 
 ---
 
 ## 📌 Live Demo & Public Deployment
-- **Live URL**: *(Deployment will be configured in Phase 5 after core real-time sync is finalized)*
-- **Backend Service**: Render / Railway (Node.js WebSocket persistent service)
-- **Frontend App**: Render / Vercel (Static SPA)
+- **Backend Service (Live on Render)**: [https://youtube-watch-party-server-g1bk.onrender.com](https://youtube-watch-party-server-g1bk.onrender.com)
+- **Backend Health Check**: [https://youtube-watch-party-server-g1bk.onrender.com/api/health](https://youtube-watch-party-server-g1bk.onrender.com/api/health)
+- **Frontend App**: Vercel (Static SPA)
 
 ---
 

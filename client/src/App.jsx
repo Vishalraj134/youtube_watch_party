@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Navbar from './components/Navbar';
 import HomePage from './pages/HomePage';
 import WatchRoomPage from './pages/WatchRoomPage';
-import { getSocket, createRoomSocket, joinRoomSocket, leaveRoomSocket } from './services/socket';
+import { getSocket, createRoomSocket, joinRoomSocket, leaveRoomSocket, SERVER_URL } from './services/socket';
 import './App.css';
 
 export default function App() {
@@ -41,7 +41,7 @@ export default function App() {
   const checkBackendHealth = useCallback(async () => {
     setIsCheckingHealth(true);
     try {
-      const response = await fetch('/api/health');
+      const response = await fetch(`${SERVER_URL}/api/health`);
       if (response.ok) {
         const data = await response.json();
         setBackendStatus({
@@ -55,7 +55,7 @@ export default function App() {
       }
     } catch {
       try {
-        const fallbackRes = await fetch('http://localhost:5000/api/health');
+        const fallbackRes = await fetch('/api/health');
         if (fallbackRes.ok) {
           const fallbackData = await fallbackRes.json();
           setBackendStatus({
